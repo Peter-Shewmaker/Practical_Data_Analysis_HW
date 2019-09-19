@@ -1,0 +1,527 @@
+---
+title: "Practical Data Analysis Homework 1"
+author: 'Peter Shewmaker'
+date: "September 19, 2019"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+library(knitr)
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Problem 1
+
+The dataset mcalindon_Big.csv loaded on the Canvas site in the Datasets folder contains information on individuals who were involved in a clinical trial that measured their pain on 7 different days over the course of several weeks together with local weather information for each person. This is described in paper #8 on the syllabus.Construct a dataset which contains just the first observation for each individual (i.e., you should have as many rows as people)
+
+Hint: use the rle function to determine the unique id numbers and the number of rows associated with each id. Then use functions like cumsum to construct the starting and ending row numbers for each individual. This will then allow you to pull off the first row for each person.
+
+First, we read in the data set and observe how many unique ID numbers there are in the data by using the "rle" function. The "rle" function determines how many times equal values are repeated in a vector, and what those values are. This informs us not only of all the unique ID numbers, but also how many rows lie between the first usage of each unique ID. 
+
+From this we can obtain the row numbers of the first row associated with each ID: starting at row 1, we add the number of times that the first unique ID was repeated - this is the first row that the second unique ID was first used, and adding the number of times the second unique ID was repeated to this row number produces the first row that the third unique ID was first used. We can use the "cumsum" function to create a vector with all the row numbers, this function returns the cumulative sums of a vector, which is exactly what we need to perform the described process. Notice here that we do not need to know how many times the last ID is repeated, and thus that value is removed from the vector before the "cumsum" function is applied. Code for this process can be found at the end of the document.
+```{r, echo = F}
+#Read in data
+pain_data <- read.csv("McAlindon_Big.csv")
+#Obtain the unique ID values and how many times they are repeated
+run_lengths <- rle(pain_data$ID)
+#Save only the number of times each unique ID is repeated
+repeats <- run_lengths$lengths
+#Create a vector with the row numbers where each unique ID is first used
+first_use_rows <- cumsum(c(1, repeats[-length(repeats)]))
+#Select these rows from the data
+pain_data_first_rows <- pain_data[first_use_rows,]
+```
+
+
+### a. Summarize the average pain score for each of the 7 days of the study.
+The columns that contain a pain score can be selected out of the data frame using the "grepl" function since they all have the string "pain" in their column name. Once selected out, the average of each column can be calculated with the "colMeans" function. Since there are missing values, the argument "na.rm" must be set to TRUE. Then the "summary" function is called on the vector containing the average pain scores.
+
+The average of the mean pain scores for each of the 7 days of the study is 7.451, and participants ranked their pain the highest on the first day, and the lowest on the last day.
+
+```{r, echo = F}
+#Select out the columns where the string "pain" is in the column name. 
+#Check to make sure that this only selects the relevant columns 
+#(in this case only the pain score columns contain the string "pain").
+pain_columns <- pain_data[,grepl("pain", names(pain_data))]
+#Calculate the average pain score for each of the 7 days of the study, excluding missing values.
+average_pain_scores <- colMeans(pain_columns, na.rm = TRUE)
+#Call summary on the average pain scores
+print(average_pain_scores)
+summary(average_pain_scores)
+```
+
+### b. Regress each pain score on age and use the summary function to create a summary table for each regression. Then find the 95% confidence interval for the regression slopes (e.g. use the confint function) and produce a table with the estimates, standard errors, p-values and confidence intervals of the 7 slopes and put these in a single table.
+
+
+
+```{r, echo = F}
+#Add age column to the pain_columns data frame
+pain_columns$age <- pain_data$age
+#Perform the regression for each of the pain score columns
+pain_regressions <- lapply(1:7, function(x) lm(pain_columns[,x] ~ pain_columns$age))
+#Create summary tables for each of the regressions
+pain_regressions_summaries <- lapply(pain_regressions, summary)
+#Extract estimates, standard errors, p-values to a table
+slope_table <- as.data.frame(t(sapply(pain_regressions_summaries, function(x)
+  coefficients(x)[2,], simplify = "array"))[,-3])
+#Add the 95% confidence interval values
+slope_table$CI_lower <- sapply(pain_regressions, function(x) confint(x)[2,1])
+slope_table$CI_upper <- sapply(pain_regressions, function(x) confint(x)[2,2])
+rownames(slope_table) <- lapply(1:7, function(x) paste("pain", x, sep = "."))
+print(slope_table)
+```
+
+Each of the estimates for the slope of the regressions is negative, showing that as age increases, pain scores tend to decrease. The $p$-values are all quite close to zero, allowing us to reject the null hypothesis that the slope equals zero when $\alpha = 0.05$. This can also be seen in the 95% confidence intervals, since each of the intervals contain only negative values and thus do not contain zero.
+
+### c. For each individual fit a regression of pain on time. Summarize the slopes and intercepts produced.
+
+The following table is the result of calling the "summary" function on a table containing the intercepts and slopes for each of the regressions.
+
+```{r, echo =F, results='hide', message=FALSE, warning=FALSE}
+#Create function that accepts ID number as input, 
+#returns the regression of pain on time for that individual.
+
+individual_regression <- function(ID_no){
+  #Select the data for the individual with the supplied ID number
+  individual_data <- pain_data[pain_data$ID == ID_no,]
+  #Collapse all the columns with pain scores into one column
+  pain_column_nos <- grep("pain",names(pain_data))
+  full_pain_column <- c()
+  for(i in pain_column_nos){
+    full_pain_column <- c(full_pain_column, unique(individual_data[,i]))
+  }
+  #Collapse all the date columns into one column
+  date_column_nos <- grep("last",names(pain_data))
+  full_date_column <- c()
+  for(i in date_column_nos){
+    full_date_column <- c(full_date_column, unique(individual_data[,i]))
+  }
+  #Return the regression of pain based on time (dates)
+  return(lm(full_pain_column ~ full_date_column))
+}
+
+#Then apply the new function to each unique ID number
+individual_regression_results <- lapply(unique(pain_data$ID), individual_regression)
+#Obtain coefficients from each of the regressions
+individual_regression_summaries <- lapply(individual_regression_results, summary) 
+individual_regression_summaries <- lapply(individual_regression_summaries, coefficients)
+
+#Create a table from the coefficients, each row containing an individuals
+#coefficient estimates, error, etc.
+individual_regression_table <- data.frame(matrix(NA, nrow = 205, ncol = 8))
+for(i in 1:length(individual_regression_summaries)){
+  if(dim(individual_regression_summaries[[i]])[1] == 1){
+    individual_regression_table[i,1:4] <- individual_regression_summaries[[i]]
+  }else{
+  individual_regression_table[i,] <- c(individual_regression_summaries[[i]][1,],individual_regression_summaries[[i]][2,])
+  }
+}
+#name the table
+names(individual_regression_table) <- c("(Intercept) Estimate", "(Intercept) Std. Error", "(Intercept) t value", "(Intercept) p value", "Slope Estimate", "Slope Std. Error", "Slope t value", "Slope p value")
+```
+```{r, echo = F}
+#display summary of table
+summary(individual_regression_table)
+```
+In the above regressions, the intercept represents what the pain score would be at time equal to zero. Notice here that the results show that the median intercept is 10.577 (the maximum score for pain is a 10) and that the median slope is -0.024902, implying that for the median patient pain decreases over time - decreasing by -0.024902 for each additional day. 
+
+Since the 3rd quartile for slope is positive, the upper quartile of patients had pain increase over time. However, note here that the median p value for the slope is 0.157, showing that for at least half of the regressions, the null hypothesis that time is unrelated to pain cannot be rejected even for relatively high levels of $\alpha$.
+
+### d. Are the slopes or intercepts related to any of the patient characteristics (age, race, income, treatment, sex,  occupation, working status, use of NSAIDs,)?
+
+
+
+### e. Use the whole database to compute the correlation for each individual between their pain scores and the average temperature on the dates the pain scores were taken. Construct a graph to display these correlations. Discuss whether pain is correlated with temperature.
+
+```{r, echo = F, results='hide', message=FALSE, warning=FALSE}
+#Create function that accepts ID number as input, 
+#returns the regression of pain on average temperature for that individual.
+
+individual_correlation <- function(ID_no){
+  #Select the data for the individual with the supplied ID number
+  individual_data <- pain_data[pain_data$ID == ID_no,]
+  #Collapse all the columns with pain scores into one column
+  pain_column_nos <- grep("pain",names(pain_data))
+  full_pain_column <- c()
+  for(i in pain_column_nos){
+    full_pain_column <- c(full_pain_column, unique(individual_data[,i]))
+  }
+  #Collapse all the temperature columns into one column
+  date_column_nos <- grep("last",names(pain_data))
+  full_date_column <- c()
+  for(i in date_column_nos){
+    full_date_column <- c(full_date_column, unique(individual_data[,i]))
+  }
+  full_temp_column <- c()
+  for(i in full_date_column){
+    if(is.na(i)){
+      full_temp_column <- c(full_temp_column, i)
+    }else{
+      full_temp_column <- c(full_temp_column, individual_data$avgtemp[individual_data$WeatherDate == i])
+    }
+  }
+  #Return the correlation of pain and average temperature,  using only pairwise complete observations
+  return(cor(full_temp_column, full_pain_column, use = "complete.obs"))
+}
+
+#Create vector containing correlations for each individual
+individual_correlation_results <- as.numeric(lapply(unique(pain_data$ID), individual_correlation))
+```
+```{r, echo = F}
+#Display histogram containing results
+summary(individual_correlation_results)
+hist(individual_correlation_results, xlab = "Correlations", main = "Histogram of ind. correlations between pain and avg temp", breaks = 10)
+```
+
+Note that the correlations were calculated with "use = 'complete.obs'" to eliminate issues with missing values. From the above histogram, we can see that the correlation values are distributed close to uniformly over the interval [-1,1], since the expected value for each box would be close to 20 (196 participants in 10 boxes). Although the largest box is for values close to 1 and the smallest box is for values close to -1, many of the other boxes occur with a frequency near 20. From these results it would be difficult to point to an obvious pattern in the correlations between pain and average temperature.
+
+### f. Express these correlations as regressions and describe the slopes and intercepts as in problem (c). What do you notice about the distributions of the correlations in (e) and the slopes in (f)?
+
+```{r, echo = F}
+##Create function that accepts ID number as input, 
+#returns the regression of pain on average temperature for that individual.
+individual_regression_temp <- function(ID_no){
+  #Select the data for the individual with the supplied ID number
+  individual_data <- pain_data[pain_data$ID == ID_no,]
+  #Collapse all the columns with pain scores into one column
+  pain_column_nos <- grep("pain",names(pain_data))
+  full_pain_column <- c()
+  for(i in pain_column_nos){
+    full_pain_column <- c(full_pain_column, unique(individual_data[,i]))
+  }
+  #Collapse all the temperature columns into one column
+  date_column_nos <- grep("last",names(pain_data))
+  full_date_column <- c()
+  for(i in date_column_nos){
+    full_date_column <- c(full_date_column, unique(individual_data[,i]))
+  }
+  full_temp_column <- c()
+  for(i in full_date_column){
+    if(is.na(i)){
+      full_temp_column <- c(full_temp_column, i)
+    }else{
+      full_temp_column <- c(full_temp_column, individual_data$avgtemp[individual_data$WeatherDate == i])
+    }
+  }
+  #Return the regression of pain and average temperature
+  return(lm(full_pain_column ~ full_temp_column))
+}
+#Then apply the new function to each unique ID number
+individual_regression_temp_results <- lapply(unique(pain_data$ID), individual_regression_temp)
+#Obtain coefficients from each of the regressions
+individual_regression_temp_coefficients <- t(sapply(individual_regression_temp_results, coefficients))
+colnames(individual_regression_temp_coefficients) <- c("Intercepts", "Slopes")
+#Produce summary of the intercepts and slopes
+summary(individual_regression_temp_coefficients)
+#Histogram of slopes
+hist(individual_regression_temp_coefficients[,2], breaks = 50, xlab = "Slopes", main = "Histogram of ind. regression slopes for pain score on age")
+```
+The median intercept of the regressions is 6.47043, and the median slope of the regressions is 0.02169, so that for the median patient each increase of 1 degree of average temperature implies an increase in pain score of 0.02169. However, the histogram of regression slopes appears to be normally distributed and centered close to zero. Compare this to the histogram of correlations between the two variables, which showed a near uniform distribution over [-1,1]. From this we might conclude that these two variables are not highly associated with each other, since if they were the average slope would lie further from zero, and the correlations would be grouped more around a non-zero value.
+
+###  g. For each individual, do the multiple regression of pain on both time and temperature. What can you conclude about potential confounding between time and temperature?
+
+```{r, echo = F, results='hide', message=FALSE, warning=FALSE}
+##Create function that accepts ID number as input, 
+#returns the regression of pain on average temperature for that individual.
+individual_multiple_regression <- function(ID_no){
+  #Select the data for the individual with the supplied ID number
+  individual_data <- pain_data[pain_data$ID == ID_no,]
+  #Collapse all the columns with pain scores into one column
+  pain_column_nos <- grep("pain",names(pain_data))
+  full_pain_column <- c()
+  for(i in pain_column_nos){
+    full_pain_column <- c(full_pain_column, unique(individual_data[,i]))
+  }
+  #Collapse all the temperature columns into one column
+  date_column_nos <- grep("last",names(pain_data))
+  full_date_column <- c()
+  for(i in date_column_nos){
+    full_date_column <- c(full_date_column, unique(individual_data[,i]))
+  }
+  full_temp_column <- c()
+  for(i in full_date_column){
+    if(is.na(i)){
+      full_temp_column <- c(full_temp_column, i)
+    }else{
+      full_temp_column <- c(full_temp_column, individual_data$avgtemp[individual_data$WeatherDate == i])
+    }
+  }
+  #Return the regression of pain and average temperature
+  return(lm(full_pain_column ~ full_temp_column + full_date_column))
+}
+#Then apply the new function to each unique ID number
+individual_multiple_regression_results <- lapply(unique(pain_data$ID), individual_multiple_regression)
+#Obtain coefficients from each of the regressions
+individual_multiple_regression_summaries <- lapply(individual_multiple_regression_results, summary)
+individual_multiple_regression_coefficients <- lapply(individual_multiple_regression_summaries, coefficients)
+#Create table with regression results, one row per individual
+individual_multiple_regression_table <- data.frame(matrix(NA, nrow = 205, ncol = 12))
+for(i in 1:length(individual_multiple_regression_coefficients)){
+  if(dim(individual_multiple_regression_coefficients[[i]])[1] == 1){
+    individual_multiple_regression_table[i,1:4] <- individual_multiple_regression_coefficients[[i]]
+  }else if(dim(individual_multiple_regression_coefficients[[i]])[1] == 2){
+    individual_multiple_regression_table[i,1:8] <- c(individual_multiple_regression_coefficients[[i]][1,], individual_multiple_regression_coefficients[[i]][2,])
+  }else{
+  individual_multiple_regression_table[i,] <- c(individual_multiple_regression_coefficients[[i]][1,],individual_multiple_regression_coefficients[[i]][2,], individual_multiple_regression_coefficients[[i]][3,])
+  }
+}
+
+names(individual_multiple_regression_table) <- c("(Intercept) Estimate", "(Intercept) Std. Error", "(Intercept) t value", "(Intercept) p value","Temp Coeff Estimate", "Temp Coeff Std. Error", "Temp Coeff t value", "Temp Coeff p value", "Time Coeff Estimate", "Time Coeff Std. Error", "Time Coeff t value", "Time Coeff p value")
+```
+```{r, echo = F}
+#Produce summary of the intercepts and slopes
+summary(individual_multiple_regression_table)
+```
+
+Notice that from the summary table, the median values for both the time and temperature coefficients are close to zero. Further more, the 1st quartile p-values for both the time and temperature coefficients are far higher than 0.05, showing that the results of the regression are not statistically significant in over 3/4 of the cases. In the case where time was the only term in the regression, the first quartile was 0.014, so that at least a quarter of the regressions had statistically significant results. Thus we can conclude that it is likely that the significant results from the regressions based on time alone did not account for confounding caused by the temperature on the dates the pain scores were recorded.
+
+## Problem 2
+```{r, echo = F}
+full_data <- read.csv("Wang.csv")
+taichi_data <- full_data[full_data$group == 1,]
+pt_data <- full_data[full_data$group == 0,]
+characteristics <- c("Demographics","Women, no. (%)","Age, years","White, no. (%)","Greater than or equal to high school education, no. (%)","Body mass index, kg/m","Disease condition","Duration of knee pain (on study knee), years","Radiograph score, no. (%)","K/L grade 2","K/L grade 3","K/L grade 4","Knee surgery, no. (%)","Patient VAS (range 0–10 cm)","Physician VAS (study knee; range 0–10 cm)","WOMAC pain (range 0–500 mm)", "WOMAC physical function (range 0–1,700 mm)", "WOMAC stiffness (range 0–200 mm)","Receiving NSAIDs prior to study, no. (%)", "Receiving analgesics prior to study, no. (%)","Self-reported comorbidities, no. (%)","Congestive heart disease","Hypertension","Diabetes mellitus","Health-related quality of life and others","SF-36 PCS (range 0–100)","SF-36 MCS (range 0–100)","CES-D (range 0–60)","Self-efficacy score (range 1–5)","Physical performance","6-minute walk test, yards","Balance score (range 0–5)","Chair stand score, seconds")
+baseline_dataframe <- as.data.frame(cbind(characteristics, 0, 0,0), stringsAsFactors = FALSE)
+names(baseline_dataframe) <- c("Characteristic", "taichi", "pt", "full")
+row.names(baseline_dataframe) <- characteristics
+baseline_dataframe <- baseline_dataframe[,-1]
+
+
+#gender
+baseline_dataframe$taichi[2] <- paste(sum(taichi_data$female), " (", round((sum(taichi_data$female)/dim(taichi_data)[1]) * 100), ")", sep ="")
+#age
+baseline_dataframe$taichi[3] <- paste(round(mean(taichi_data$age),1), " ± ", round(sd(taichi_data$age),1), sep ="")
+#white (since no other races included)
+baseline_dataframe$taichi[4] <- paste(sum(taichi_data$white), " (", round((sum(taichi_data$white)/dim(taichi_data)[1]) * 100), ")", sep ="")
+#high.school.education
+baseline_dataframe$taichi[5] <- paste(sum(taichi_data$high.school.education), " (", round((sum(taichi_data$high.school.education)/dim(taichi_data)[1]) * 100), ")", sep ="")
+#bmi
+baseline_dataframe$taichi[6] <- paste(round(mean(taichi_data$bmi),1), " ± ", round(sd(taichi_data$bmi),1), sep ="")
+#duration
+baseline_dataframe$taichi[8] <- paste(round(mean(taichi_data$duration,na.rm=TRUE),1), " ± ", round(sd(taichi_data$duration,na.rm=TRUE),1), sep ="")
+
+#radiograph_score
+#2
+baseline_dataframe$taichi[10] <- paste(sum(taichi_data$radiograph.score == 2), " (", round((sum(taichi_data$radiograph.score == 2)/dim(taichi_data)[1]) * 100), ")", sep ="")
+
+#3
+baseline_dataframe$taichi[11] <- paste(sum(taichi_data$radiograph.score == 3), " (", round((sum(taichi_data$radiograph.score == 3)/dim(taichi_data)[1]) * 100), ")", sep ="")
+
+#4
+baseline_dataframe$taichi[12] <- paste(sum(taichi_data$radiograph.score == 4), " (", round((sum(taichi_data$radiograph.score == 4)/dim(taichi_data)[1]) * 100), ")", sep ="")
+
+#knee.surgery
+baseline_dataframe$taichi[13] <- paste(sum(taichi_data$knee.surgery), " (", round((sum(taichi_data$knee.surgery)/dim(taichi_data)[1]) * 100), ")", sep ="")
+
+#patient VAS
+baseline_dataframe$taichi[14] <- paste(round(mean(taichi_data$pt.global.vas.1,na.rm=TRUE),1), " ± ", round(sd(taichi_data$pt.global.vas.1,na.rm=TRUE),1), sep ="")
+
+#physician VAS
+baseline_dataframe$taichi[15] <- paste(round(mean(taichi_data$physician.vas.1,na.rm=TRUE),1), " ± ", round(sd(taichi_data$physician.vas.1,na.rm=TRUE),1), sep ="")
+
+#womac pain
+baseline_dataframe$taichi[16] <- paste(round(mean(taichi_data$womac.pain.1,na.rm=TRUE),1), " ± ", round(sd(taichi_data$womac.pain.1,na.rm=TRUE),1), sep ="")
+
+#womac phys. function
+baseline_dataframe$taichi[17] <- paste(round(mean(taichi_data$womac.phys.func.1,na.rm=TRUE),1), " ± ", round(sd(taichi_data$womac.phys.func.1,na.rm=TRUE),1), sep ="")
+
+#womac stiffness
+baseline_dataframe$taichi[18] <- paste(round(mean(taichi_data$pcs.1,na.rm=TRUE),1), " ± ", round(sd(taichi_data$pcs.1,na.rm=TRUE),1), sep ="")
+
+#nsaids
+baseline_dataframe$taichi[19] <- paste(sum(taichi_data$nsaids.1), " (", round((sum(taichi_data$nsaids.1)/dim(taichi_data)[1]) * 100), ")", sep ="")
+
+#analgesics
+baseline_dataframe$taichi[20] <- paste(sum(taichi_data$analg.1), " (", round((sum(taichi_data$analg.1)/dim(taichi_data)[1]) * 100), ")", sep ="")
+
+#history chd
+baseline_dataframe$taichi[22] <- paste(sum(taichi_data$hxchd), " (", round((sum(taichi_data$hxchd)/dim(taichi_data)[1]) * 100), ")", sep ="")
+
+#history hypertension
+baseline_dataframe$taichi[23] <- paste(sum(taichi_data$hxhtn), " (", round((sum(taichi_data$hxhtn)/dim(taichi_data)[1]) * 100), ")", sep ="")
+
+#history diabetes
+baseline_dataframe$taichi[24] <- paste(sum(taichi_data$hxdm), " (", round((sum(taichi_data$hxdm)/dim(taichi_data)[1]) * 100), ")", sep ="")
+
+#sf-36 pcs
+baseline_dataframe$taichi[26] <- paste(round(mean(taichi_data$pcs.1,na.rm=TRUE),1), " ± ", round(sd(taichi_data$pcs.1,na.rm=TRUE),1), sep ="")
+
+#sf-36 mcs
+baseline_dataframe$taichi[27] <- paste(round(mean(taichi_data$mcs.1,na.rm=TRUE),1), " ± ", round(sd(taichi_data$mcs.1,na.rm=TRUE),1), sep ="")
+
+#cesd
+baseline_dataframe$taichi[28] <- paste(round(mean(taichi_data$cesd.1,na.rm=TRUE),1), " ± ", round(sd(taichi_data$cesd.1,na.rm=TRUE),1), sep ="")
+
+#self efficacy
+baseline_dataframe$taichi[29] <- paste(round(mean(taichi_data$self.efficacy.1,na.rm=TRUE),1), " ± ", round(sd(taichi_data$self.efficacy.1,na.rm=TRUE),1), sep ="")
+
+#walk test
+baseline_dataframe$taichi[31] <- paste(round(mean(taichi_data$walkyard.1,na.rm=TRUE),1), " ± ", round(sd(taichi_data$walkyard.1,na.rm=TRUE),1), sep ="")
+
+#balance
+baseline_dataframe$taichi[32] <- paste(round(mean(taichi_data$balance.1,na.rm=TRUE),1), " ± ", round(sd(taichi_data$balance.1,na.rm=TRUE),1), sep ="")
+
+#chairstand
+baseline_dataframe$taichi[33] <- paste(round(mean(taichi_data$chairstand.1,na.rm=TRUE),1), " ± ", round(sd(taichi_data$chairstand.1,na.rm=TRUE),1), sep ="")
+
+
+#gender
+baseline_dataframe$pt[2] <- paste(sum(pt_data$female), " (", round((sum(pt_data$female)/dim(pt_data)[1]) * 100), ")", sep ="")
+#age
+baseline_dataframe$pt[3] <- paste(round(mean(pt_data$age),1), " ± ", round(sd(pt_data$age),1), sep ="")
+#white (since no other races included)
+baseline_dataframe$pt[4] <- paste(sum(pt_data$white), " (", round((sum(pt_data$white)/dim(pt_data)[1]) * 100), ")", sep ="")
+#high.school.education
+baseline_dataframe$pt[5] <- paste(sum(pt_data$high.school.education), " (", round((sum(pt_data$high.school.education)/dim(pt_data)[1]) * 100), ")", sep ="")
+#bmi
+baseline_dataframe$pt[6] <- paste(round(mean(pt_data$bmi),1), " ± ", round(sd(pt_data$bmi),1), sep ="")
+#duration
+baseline_dataframe$pt[8] <- paste(round(mean(pt_data$duration,na.rm=TRUE),1), " ± ", round(sd(pt_data$duration,na.rm=TRUE),1), sep ="")
+
+#radiograph_score
+#2
+baseline_dataframe$pt[10] <- paste(sum(pt_data$radiograph.score == 2), " (", round((sum(pt_data$radiograph.score == 2)/dim(pt_data)[1]) * 100), ")", sep ="")
+
+#3
+baseline_dataframe$pt[11] <- paste(sum(pt_data$radiograph.score == 3), " (", round((sum(pt_data$radiograph.score == 3)/dim(pt_data)[1]) * 100), ")", sep ="")
+
+#4
+baseline_dataframe$pt[12] <- paste(sum(pt_data$radiograph.score == 4), " (", round((sum(pt_data$radiograph.score == 4)/dim(pt_data)[1]) * 100), ")", sep ="")
+
+#knee.surgery
+baseline_dataframe$pt[13] <- paste(sum(pt_data$knee.surgery), " (", round((sum(pt_data$knee.surgery)/dim(pt_data)[1]) * 100), ")", sep ="")
+
+#patient VAS
+baseline_dataframe$pt[14] <- paste(round(mean(pt_data$pt.global.vas.1,na.rm=TRUE),1), " ± ", round(sd(pt_data$pt.global.vas.1,na.rm=TRUE),1), sep ="")
+
+#physician VAS
+baseline_dataframe$pt[15] <- paste(round(mean(pt_data$physician.vas.1,na.rm=TRUE),1), " ± ", round(sd(pt_data$physician.vas.1,na.rm=TRUE),1), sep ="")
+
+#womac pain
+baseline_dataframe$pt[16] <- paste(round(mean(pt_data$womac.pain.1,na.rm=TRUE),1), " ± ", round(sd(pt_data$womac.pain.1,na.rm=TRUE),1), sep ="")
+
+#womac phys. function
+baseline_dataframe$pt[17] <- paste(round(mean(pt_data$womac.phys.func.1,na.rm=TRUE),1), " ± ", round(sd(pt_data$womac.phys.func.1,na.rm=TRUE),1), sep ="")
+
+#womac stiffness
+baseline_dataframe$pt[18] <- paste(round(mean(pt_data$pcs.1,na.rm=TRUE),1), " ± ", round(sd(pt_data$pcs.1,na.rm=TRUE),1), sep ="")
+
+#nsaids
+baseline_dataframe$pt[19] <- paste(sum(pt_data$nsaids.1), " (", round((sum(pt_data$nsaids.1)/dim(pt_data)[1]) * 100), ")", sep ="")
+
+#analgesics
+baseline_dataframe$pt[20] <- paste(sum(pt_data$analg.1), " (", round((sum(pt_data$analg.1)/dim(pt_data)[1]) * 100), ")", sep ="")
+
+#history chd
+baseline_dataframe$pt[22] <- paste(sum(pt_data$hxchd), " (", round((sum(pt_data$hxchd)/dim(pt_data)[1]) * 100), ")", sep ="")
+
+#history hypertension
+baseline_dataframe$pt[23] <- paste(sum(pt_data$hxhtn), " (", round((sum(pt_data$hxhtn)/dim(pt_data)[1]) * 100), ")", sep ="")
+
+#history diabetes
+baseline_dataframe$pt[24] <- paste(sum(pt_data$hxdm), " (", round((sum(pt_data$hxdm)/dim(pt_data)[1]) * 100), ")", sep ="")
+
+#sf-36 pcs
+baseline_dataframe$pt[26] <- paste(round(mean(pt_data$pcs.1,na.rm=TRUE),1), " ± ", round(sd(pt_data$pcs.1,na.rm=TRUE),1), sep ="")
+
+#sf-36 mcs
+baseline_dataframe$pt[27] <- paste(round(mean(pt_data$mcs.1,na.rm=TRUE),1), " ± ", round(sd(pt_data$mcs.1,na.rm=TRUE),1), sep ="")
+
+#cesd
+baseline_dataframe$pt[28] <- paste(round(mean(pt_data$cesd.1,na.rm=TRUE),1), " ± ", round(sd(pt_data$cesd.1,na.rm=TRUE),1), sep ="")
+
+#self efficacy
+baseline_dataframe$pt[29] <- paste(round(mean(pt_data$self.efficacy.1,na.rm=TRUE),1), " ± ", round(sd(pt_data$self.efficacy.1,na.rm=TRUE),1), sep ="")
+
+#walk test
+baseline_dataframe$pt[31] <- paste(round(mean(pt_data$walkyard.1,na.rm=TRUE),1), " ± ", round(sd(pt_data$walkyard.1,na.rm=TRUE),1), sep ="")
+
+#balance
+baseline_dataframe$pt[32] <- paste(round(mean(pt_data$balance.1,na.rm=TRUE),1), " ± ", round(sd(pt_data$balance.1,na.rm=TRUE),1), sep ="")
+
+#chairstand
+baseline_dataframe$pt[33] <- paste(round(mean(pt_data$chairstand.1,na.rm=TRUE),1), " ± ", round(sd(pt_data$chairstand.1,na.rm=TRUE),1), sep ="")
+
+#gender
+baseline_dataframe$full[2] <- paste(sum(full_data$female), " (", round((sum(full_data$female)/dim(full_data)[1]) * 100), ")", sep ="")
+#age
+baseline_dataframe$full[3] <- paste(round(mean(full_data$age),1), " ± ", round(sd(full_data$age),1), sep ="")
+#white (since no other races included)
+baseline_dataframe$full[4] <- paste(sum(full_data$white), " (", round((sum(full_data$white)/dim(full_data)[1]) * 100), ")", sep ="")
+#high.school.education
+baseline_dataframe$full[5] <- paste(sum(full_data$high.school.education), " (", round((sum(full_data$high.school.education)/dim(full_data)[1]) * 100), ")", sep ="")
+#bmi
+baseline_dataframe$full[6] <- paste(round(mean(full_data$bmi),1), " ± ", round(sd(full_data$bmi),1), sep ="")
+#duration
+baseline_dataframe$full[8] <- paste(round(mean(full_data$duration,na.rm=TRUE),1), " ± ", round(sd(full_data$duration,na.rm=TRUE),1), sep ="")
+
+#radiograph_score
+#2
+baseline_dataframe$full[10] <- paste(sum(full_data$radiograph.score == 2), " (", round((sum(full_data$radiograph.score == 2)/dim(full_data)[1]) * 100), ")", sep ="")
+
+#3
+baseline_dataframe$full[11] <- paste(sum(full_data$radiograph.score == 3), " (", round((sum(full_data$radiograph.score == 3)/dim(full_data)[1]) * 100), ")", sep ="")
+
+#4
+baseline_dataframe$full[12] <- paste(sum(full_data$radiograph.score == 4), " (", round((sum(full_data$radiograph.score == 4)/dim(full_data)[1]) * 100), ")", sep ="")
+
+#knee.surgery
+baseline_dataframe$full[13] <- paste(sum(full_data$knee.surgery), " (", round((sum(full_data$knee.surgery)/dim(full_data)[1]) * 100), ")", sep ="")
+
+#patient VAS
+baseline_dataframe$full[14] <- paste(round(mean(full_data$pt.global.vas.1,na.rm=TRUE),1), " ± ", round(sd(full_data$pt.global.vas.1,na.rm=TRUE),1), sep ="")
+
+#physician VAS
+baseline_dataframe$full[15] <- paste(round(mean(full_data$physician.vas.1,na.rm=TRUE),1), " ± ", round(sd(full_data$physician.vas.1,na.rm=TRUE),1), sep ="")
+
+#womac pain
+baseline_dataframe$full[16] <- paste(round(mean(full_data$womac.pain.1,na.rm=TRUE),1), " ± ", round(sd(full_data$womac.pain.1,na.rm=TRUE),1), sep ="")
+
+#womac phys. function
+baseline_dataframe$full[17] <- paste(round(mean(full_data$womac.phys.func.1,na.rm=TRUE),1), " ± ", round(sd(full_data$womac.phys.func.1,na.rm=TRUE),1), sep ="")
+
+#womac stiffness
+baseline_dataframe$full[18] <- paste(round(mean(full_data$pcs.1,na.rm=TRUE),1), " ± ", round(sd(full_data$pcs.1,na.rm=TRUE),1), sep ="")
+
+#nsaids
+baseline_dataframe$full[19] <- paste(sum(full_data$nsaids.1), " (", round((sum(full_data$nsaids.1)/dim(full_data)[1]) * 100), ")", sep ="")
+
+#analgesics
+baseline_dataframe$full[20] <- paste(sum(full_data$analg.1), " (", round((sum(full_data$analg.1)/dim(full_data)[1]) * 100), ")", sep ="")
+
+#history chd
+baseline_dataframe$full[22] <- paste(sum(full_data$hxchd), " (", round((sum(full_data$hxchd)/dim(full_data)[1]) * 100), ")", sep ="")
+
+#history hypertension
+baseline_dataframe$full[23] <- paste(sum(full_data$hxhtn), " (", round((sum(full_data$hxhtn)/dim(full_data)[1]) * 100), ")", sep ="")
+
+#history diabetes
+baseline_dataframe$full[24] <- paste(sum(full_data$hxdm), " (", round((sum(full_data$hxdm)/dim(full_data)[1]) * 100), ")", sep ="")
+
+#sf-36 pcs
+baseline_dataframe$full[26] <- paste(round(mean(full_data$pcs.1,na.rm=TRUE),1), " ± ", round(sd(full_data$pcs.1,na.rm=TRUE),1), sep ="")
+
+#sf-36 mcs
+baseline_dataframe$full[27] <- paste(round(mean(full_data$mcs.1,na.rm=TRUE),1), " ± ", round(sd(full_data$mcs.1,na.rm=TRUE),1), sep ="")
+
+#cesd
+baseline_dataframe$full[28] <- paste(round(mean(full_data$cesd.1,na.rm=TRUE),1), " ± ", round(sd(full_data$cesd.1,na.rm=TRUE),1), sep ="")
+
+#self efficacy
+baseline_dataframe$full[29] <- paste(round(mean(full_data$self.efficacy.1,na.rm=TRUE),1), " ± ", round(sd(full_data$self.efficacy.1,na.rm=TRUE),1), sep ="")
+
+#walk test
+baseline_dataframe$full[31] <- paste(round(mean(full_data$walkyard.1,na.rm=TRUE),1), " ± ", round(sd(full_data$walkyard.1,na.rm=TRUE),1), sep ="")
+
+#balance
+baseline_dataframe$full[32] <- paste(round(mean(full_data$balance.1,na.rm=TRUE),1), " ± ", round(sd(full_data$balance.1,na.rm=TRUE),1), sep ="")
+
+#chairstand
+baseline_dataframe$full[33] <- paste(round(mean(full_data$chairstand.1,na.rm=TRUE),1), " ± ", round(sd(full_data$chairstand.1,na.rm=TRUE),1), sep ="")
+
+baseline_dataframe[baseline_dataframe == 0] <- ""
+
+names(baseline_dataframe) <- c("Tai Chi (n = 20)", "Attention Control (n = 20)", "Total (n = 40)")
+
+kable(baseline_dataframe)
+```
