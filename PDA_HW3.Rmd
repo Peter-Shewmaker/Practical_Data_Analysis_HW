@@ -1,0 +1,119 @@
+---
+title: "Practical Data Analysis HW 3"
+author: "Peter Shewmaker"
+date: "October 14, 2019"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(lme4)
+library(predictmeans)
+```
+
+```{r, echo = F}
+#Read in data
+mcalindon <- read.csv("McAlindon_Big.csv")
+#This function will obtain the relevant rows for the multilevel model - with pain, time and temperature in a single column.
+obtain_rows <- function(ID){
+  #Select the data for the individual with the supplied ID number
+  individual_data <- mcalindon[mcalindon$ID == ID,]
+  individual_row <- individual_data[1,]
+  #Collapse all the columns with pain scores into one column
+  pain_column_nos <- grep("pain",names(mcalindon))
+  full_pain_column <- c()
+  for(i in pain_column_nos){
+    full_pain_column <- c(full_pain_column, unique(individual_data[,i]))
+  }
+  #Collapse all the temperature columns into one column
+  date_column_nos <- grep("last",names(mcalindon))
+  full_date_column <- c()
+  for(i in date_column_nos){
+    full_date_column <- c(full_date_column, unique(individual_data[,i]))
+  }
+  full_temp_column <- c()
+  for(i in full_date_column){
+    if(is.na(i)){
+      full_temp_column <- c(full_temp_column, i)
+    }else{
+      full_temp_column <- c(full_temp_column, individual_data$avgtemp[individual_data$WeatherDate == i])
+    }
+  }
+  mat <- cbind(full_pain_column, full_date_column, full_temp_column)
+  #Remove observations of pain if date or temp is missing.
+  mat <- mat[complete.cases(mat),]
+  complete <- dim(mat)[1]
+  if(is.null(complete)){
+    return(NULL)
+  }
+  mat <- cbind(rep(ID,complete), rep(individual_row$age, complete), rep(individual_row$sex, complete), rep(individual_row$racecat, complete), rep(individual_row$treat, complete), rep(individual_row$retire, complete), rep(individual_row$nsaid, complete), rep(individual_row$Income, complete), rep(individual_row$Occupation, complete), mat)
+  mat <- as.data.frame(mat)
+  names(mat) <- c("ID", "age", "sex", "race", "treat", "retire", "nsaid", "income", "occupation", "pain", "date", "temp")
+  return(mat)
+}
+
+mcalindon_new <- c()
+for (i in unique(mcalindon$ID)){
+  mcalindon_new <- rbind(mcalindon_new, obtain_rows(i))
+}
+
+```
+
+First, the data is put into a format that will interact well with the "lmer" function that fits multi-level models. For each individual, the pain scores, day the score was measured, and temperature that day will be included as rows, along with the relevant patient characteristics. If pain, date or temperature was NA, that row was not included. Here is the head of the cleaned data set.
+
+```{r, echo=F}
+head(mcalindon_new)
+```
+
+Now, since $Y_{it} = a_i + b_iX_{it} + e_{it}$, with $a_i = g_0 + g_1z_i + u_i$ and $b_i = h_0 + h_1z_i + w_i$, if we replace $a_i$ and $b_i$ in the equation for $Y_{it}$, we have:
+$$ Y_{it} = g_0 + g_1z_i + h_0X_{it} + h_1z_iX_{it} + u_i + w_iX_{it} + e_{it}.$$
+The following model is fit to the above equation, with $X_{it}$ being the average temperature on the date of the pain measurement, and $z_i$ is the age of the patient.
+```{r, echo = F}
+#Create first model
+mlm <- lmer(pain ~ 1 + I(temp/100) + age + I(temp/100) * age + (1 + I(temp/100)|ID), data = mcalindon_new)
+summary(mlm)
+```
+Note here that the fixed effects are $g_0, g_1, h_0, h_1$ and the random effects are $u_i, w_i, e_{it}$, respectively. Since the model failed to converge originally, temperature was scaled by 100. The "Residuals" random effect has a standard deviation of 2.107, this represents the standard deviation across individuals of expected pain scores. The (Intercept) random effect is the standard deviation of the intercept for each individual. Finally, the temperature random effect causes the temperature fixed effect to vary - the standard deviation of this term describes the varying individual responses to temperature change. The model shows a fairly large variance for the (Intercept) and temperature random effects, which implies that there is a significant amount of variability between baseline pain scores and the effect temperature has on pain scores.
+
+We can use the "residplot" function from the "predictmeans" package to create diagnostic plots for the model.
+```{r}
+residplot(mlm)
+```
+
+Now, we might try to build a better fitting model. First, we might try to determine which (or both) of the date and temperature variables is a better predictor at the patient level. We can do this by comparing a null model to models including terms for data and temperature. Since the model that included terms for random slopes for both the data and temperature terms. These three models will be compared against another:
+
+```{r}
+#Null model
+mlm.1 <- lmer(pain ~ 1 + (1|ID), data = mcalindon_new)
+#Model with date terms
+mlm.2 <- lmer(pain ~ 1 + I(date/100) + (1 + I(date/100)|ID), data = mcalindon_new)
+#Model with temp terms
+mlm.3 <- lmer(pain ~ 1 + I(temp/100) + (1 + I(temp/100)|ID), data = mcalindon_new)
+#Comparison using anova
+anova(mlm.1, mlm.2, mlm.3)
+```
+The model with the date variable appears to be the best model of the three.
+
+```{r}
+mlm.4 <- lmer(pain ~ 1 + I(date/100) + age + retire + I(date/100) * age + I(date/100) * retire + (1+I(date/100)|ID), data = mcalindon_new)
+mlm.5 <- lmer(pain ~ 1 + I(date/100) + retire + (1+I(date/100)|ID), data = mcalindon_new)
+mlm.6 <- lmer(pain ~ 1 + I(date/100) + age + retire + (1+I(date/100)|ID), data = mcalindon_new)
+anova(mlm.4, mlm.5, mlm.6)
+```
+
+
+2.
+
+```{r}
+#read in data
+cty <- read.csv("cty.txt")
+srrs2 <- read.csv("srrs2.txt")
+
+#Fix variables
+srrs2$basement <- as.character(srrs2$basement)
+srrs2$basement <- replace(srrs2$basement, srrs2$basement == "Y", 1)
+srrs2$basement <- replace(srrs2$basement, srrs2$basement == "N", 0)
+srrs2$basement <- replace(srrs2$basement, srrs2$basement == " ", NA)
+srrs2$basement <- as.numeric(srrs2$basement)
+
+```
